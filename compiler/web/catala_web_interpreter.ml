@@ -265,17 +265,43 @@ let () =
             (fun () -> Js._false)
           |> Js.to_bool
         in
+        let trace_format : Global.format_enum =
+          match
+            Js.Optdef.to_option
+              (Js.Unsafe.get js_options (Js.string "traceFormat"))
+          with
+          | Some fmt when Js.to_string fmt = "json" -> JSON
+          | _ -> Human
+        in
+        (* The trace is returned in the result instead of going to stdout *)
+        let trace_buffer = Buffer.create 4096 in
+        let trace_ppf = Format.formatter_of_buffer trace_buffer in
+        let trace_contents () =
+          Format.pp_print_flush trace_ppf ();
+          Js.string (Buffer.contents trace_buffer)
+        in
         let options =
           Global.enforce_options
             ~input_src:(Contents (main_contents, main_filename))
             ~language:(Some language) ~debug:false ~color:Never
             ~disable_warnings:false
-            ~trace:(if trace then Some (lazy Format.std_formatter) else None)
+            ~trace:(if trace then Some (lazy trace_ppf) else None)
+            ~trace_format
             ~path_rewrite:(fun f -> (f :> File.t))
             ~whole_program:true ()
         in
         let result =
           try
+            (* The runtime keeps the trace globally across calls *)
+            Catala_runtime.reset_trace ();
+            let input =
+              Js.Optdef.to_option
+                (Js.Unsafe.get js_options (Js.string "input"))
+              |> Option.map (fun json ->
+                     try Yojson.Safe.from_string (Js.to_string json)
+                     with Yojson.Json_error msg ->
+                       Message.error "Invalid input JSON: %s" msg)
+            in
             let includes =
               if module_files <> [] then [Global.raw_file user_modules_path]
               else []
@@ -287,7 +313,7 @@ let () =
                 ~typed:Shared_ast.Expr.typed
             in
             let results =
-              Shared_ast.Interpreter.interpret_program_dcalc prg
+              Shared_ast.Interpreter.interpret_program_dcalc ?input prg
                 (Commands.get_scope_uid prg.decl_ctx scope)
             in
             let formatted =
@@ -305,6 +331,7 @@ let () =
               val success = Js._true
               val output = Js.string formatted
               val diagnostics = Js.array (Array.of_list warning_diags)
+              val trace = trace_contents ()
             end
           with exn ->
             let warning_diags, error_notifs = drain_all ~ansi () in
@@ -315,6 +342,8 @@ let () =
 
               val diagnostics =
                 Js.array (Array.of_list (warning_diags @ error_diags))
+
+              val trace = trace_contents ()
             end
         in
         cleanup_files module_files;

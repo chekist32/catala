@@ -50,6 +50,29 @@
           conf-ninja = prev.conf-ninja.overrideAttrs (old: {
             nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.ninja ];
           });
+          catala = prev.catala.overrideAttrs (old: {
+            nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
+              pkgs.ninja
+              pkgs.makeWrapper
+            ];
+            postInstall = (old.postInstall or "") + ''
+              OCAML_VERSION=$(ocamlc -version)
+              OCAML_ROOT=$(mktemp -d)
+              mkdir -p $OCAML_ROOT/lib
+              ln -s "$(ocamlc -where)" $OCAML_ROOT/lib/ocaml
+              ln -s $out/lib/ocaml/$OCAML_VERSION/site-lib/catala $OCAML_ROOT/lib/catala
+              ln -s ${final.zarith}/lib/ocaml/$OCAML_VERSION/site-lib/zarith $OCAML_ROOT/lib/zarith
+              touch $OCAML_ROOT/lib/findlib.conf
+
+              PROJECT_DIR=$(mktemp -d)
+              (cd $PROJECT_DIR && env -u OPAM_SWITCH_PREFIX OCAMLLIB=$OCAML_ROOT/lib/ocaml $out/bin/clerk start)
+
+              mkdir -p $out/share/catala
+              cp -r $PROJECT_DIR/_build/libcatala $out/share/catala/stdlib
+
+              wrapProgram $out/bin/catala --set-default CATALA_STDLIB $out/share/catala/stdlib
+            '';
+          });
           # You can add overrides here
         };
 
